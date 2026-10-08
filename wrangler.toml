@@ -1,0 +1,11 @@
+name = "controle-custos-pessoal"
+main = "worker.js"
+compatibility_date = "2026-10-08"
+
+[assets]
+directory = "./assets"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "controle-custos"
+database_id = "c3410235-c785-4ff4-bbd4-1c53c8abb243"

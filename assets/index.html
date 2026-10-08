@@ -33,15 +33,15 @@
     </section>
   </main>
   <script>
-    const key='controle-custos-v1'; let items=JSON.parse(localStorage.getItem(key)||'[]'), editing=null;
+    let items=[], editing=null;
     const $=id=>document.getElementById(id), money=v=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v), dateFmt=v=>new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'}).format(new Date(v+'T00:00:00'));
-    function save(){localStorage.setItem(key,JSON.stringify(items)); render()}
+    async function save(){const r=await fetch('/api/items',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(items)});if(!r.ok)alert('Não foi possível salvar os dados.');render()}
     function render(){const q=$('search').value.toLowerCase();const view=items.filter(x=>x.name.toLowerCase().includes(q)).sort((a,b)=>a.date.localeCompare(b.date));$('total').textContent=money(items.reduce((s,x)=>s+Number(x.amount),0));$('count').textContent=items.length;const future=items.filter(x=>x.date>=new Date().toISOString().slice(0,10)).sort((a,b)=>a.date.localeCompare(b.date))[0];$('next').textContent=future?dateFmt(future.date):'—';$('rows').innerHTML=view.map(x=>`<tr><td>${esc(x.name)}</td><td>${dateFmt(x.date)}</td><td>${money(x.amount)}</td><td><div class="actions"><button class="secondary" onclick="editItem('${x.id}')">Editar</button><button class="danger" onclick="removeItem('${x.id}')">Excluir</button></div></td></tr>`).join('');$('empty').style.display=view.length?'none':'block'}
     function esc(s){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
     $('form').onsubmit=e=>{e.preventDefault();const record={id:editing||crypto.randomUUID(),name:$('name').value.trim(),date:$('date').value,amount:Number($('amount').value)};if(editing)items=items.map(x=>x.id===editing?record:x);else items.push(record);editing=null;$('form').reset();$('save').textContent='Adicionar';save()};
     window.editItem=id=>{const x=items.find(i=>i.id===id);editing=id;$('name').value=x.name;$('date').value=x.date;$('amount').value=x.amount;$('save').textContent='Salvar edição';window.scrollTo({top:0,behavior:'smooth'})};
     window.removeItem=id=>{if(confirm('Excluir este lançamento?')){items=items.filter(x=>x.id!==id);save()}};
-    $('search').oninput=render;$('export').onclick=()=>{const csv='Cliente,Data,Valor\n'+items.map(x=>`"${x.name.replaceAll('"','""')}",${x.date},${x.amount.toFixed(2)}`).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='controle-de-custos.csv';a.click();URL.revokeObjectURL(a.href)};render();
+    $('search').oninput=render;$('export').onclick=()=>{const csv='Cliente,Data,Valor\n'+items.map(x=>`"${x.name.replaceAll('"','""')}",${x.date},${x.amount.toFixed(2)}`).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='controle-de-custos.csv';a.click();URL.revokeObjectURL(a.href)};fetch('/api/items').then(r=>r.json()).then(data=>{items=data;render()}).catch(()=>alert('Não foi possível carregar os dados.'));
   </script>
 </body>
 </html>
