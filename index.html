@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Controle de custos</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#172033;background:#f5f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1100px;margin:auto;padding:28px 18px 50px}h1{margin:0 0 6px;font-size:clamp(1.7rem,4vw,2.4rem)}.sub{margin:0 0 24px;color:#647089}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}.card,.panel{background:#fff;border:1px solid #e4e8f0;border-radius:16px;box-shadow:0 6px 20px #243b5310}.card{padding:18px}.label{font-size:.78rem;color:#667085;text-transform:uppercase;letter-spacing:.05em}.value{font-size:1.55rem;font-weight:750;margin-top:6px}.panel{padding:18px;margin-top:18px}.form{display:grid;grid-template-columns:1.6fr 1fr 1fr auto;gap:10px;align-items:end}label{font-size:.86rem;font-weight:650;display:grid;gap:6px}input{border:1px solid #ccd3df;border-radius:9px;padding:11px 12px;font:inherit;color:inherit}button{border:0;border-radius:9px;padding:11px 15px;font:inherit;font-weight:700;cursor:pointer;background:#2f6fed;color:#fff}button.secondary{background:#edf2fb;color:#29456f}button.danger{background:#fff0f0;color:#b42318;padding:7px 10px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:12px}.filters{display:flex;gap:10px;flex-wrap:wrap}.filters input{min-width:190px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px 8px;border-bottom:1px solid #edf0f5}th{font-size:.8rem;color:#667085;text-transform:uppercase}td:last-child,th:last-child{text-align:right}.empty{text-align:center;color:#667085;padding:30px}.actions{display:flex;justify-content:flex-end;gap:6px}.notice{font-size:.85rem;color:#667085;margin:12px 0 0}@media(max-width:750px){.grid{grid-template-columns:1fr}.form{grid-template-columns:1fr 1fr}.form label:first-child{grid-column:1/-1}.form button{grid-column:1/-1}.panel{overflow:auto}table{min-width:680px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Controle de custos</h1>
+    <p class="sub">Acompanhe quanto você irá receber dos seus clientes.</p>
+    <section class="grid" aria-label="Resumo">
+      <div class="card"><div class="label">Total previsto</div><div class="value" id="total">R$ 0,00</div></div>
+      <div class="card"><div class="label">Clientes lançados</div><div class="value" id="count">0</div></div>
+      <div class="card"><div class="label">Próximo recebimento</div><div class="value" id="next">—</div></div>
+    </section>
+    <section class="panel">
+      <form id="form" class="form">
+        <label>Nome do cliente<input id="name" required placeholder="Ex.: Empresa Alfa"></label>
+        <label>Data de recebimento<input id="date" type="date" required></label>
+        <label>Valor a receber<input id="amount" type="number" min="0" step="0.01" required placeholder="0,00"></label>
+        <button id="save" type="submit">Adicionar</button>
+      </form>
+      <p class="notice">Os registros são salvos automaticamente neste navegador.</p>
+    </section>
+    <section class="panel">
+      <div class="toolbar"><strong>Lançamentos</strong><div class="filters"><input id="search" placeholder="Buscar cliente..."><button class="secondary" id="export" type="button">Exportar CSV</button></div></div>
+      <table><thead><tr><th>Cliente</th><th>Data</th><th>Valor</th><th>Ações</th></tr></thead><tbody id="rows"></tbody></table>
+      <div class="empty" id="empty">Nenhum lançamento cadastrado.</div>
+    </section>
+  </main>
+  <script>
+    const key='controle-custos-v1'; let items=JSON.parse(localStorage.getItem(key)||'[]'), editing=null;
+    const $=id=>document.getElementById(id), money=v=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v), dateFmt=v=>new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'}).format(new Date(v+'T00:00:00'));
+    function save(){localStorage.setItem(key,JSON.stringify(items)); render()}
+    function render(){const q=$('search').value.toLowerCase();const view=items.filter(x=>x.name.toLowerCase().includes(q)).sort((a,b)=>a.date.localeCompare(b.date));$('total').textContent=money(items.reduce((s,x)=>s+Number(x.amount),0));$('count').textContent=items.length;const future=items.filter(x=>x.date>=new Date().toISOString().slice(0,10)).sort((a,b)=>a.date.localeCompare(b.date))[0];$('next').textContent=future?dateFmt(future.date):'—';$('rows').innerHTML=view.map(x=>`<tr><td>${esc(x.name)}</td><td>${dateFmt(x.date)}</td><td>${money(x.amount)}</td><td><div class="actions"><button class="secondary" onclick="editItem('${x.id}')">Editar</button><button class="danger" onclick="removeItem('${x.id}')">Excluir</button></div></td></tr>`).join('');$('empty').style.display=view.length?'none':'block'}
+    function esc(s){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+    $('form').onsubmit=e=>{e.preventDefault();const record={id:editing||crypto.randomUUID(),name:$('name').value.trim(),date:$('date').value,amount:Number($('amount').value)};if(editing)items=items.map(x=>x.id===editing?record:x);else items.push(record);editing=null;$('form').reset();$('save').textContent='Adicionar';save()};
+    window.editItem=id=>{const x=items.find(i=>i.id===id);editing=id;$('name').value=x.name;$('date').value=x.date;$('amount').value=x.amount;$('save').textContent='Salvar edição';window.scrollTo({top:0,behavior:'smooth'})};
+    window.removeItem=id=>{if(confirm('Excluir este lançamento?')){items=items.filter(x=>x.id!==id);save()}};
+    $('search').oninput=render;$('export').onclick=()=>{const csv='Cliente,Data,Valor\n'+items.map(x=>`"${x.name.replaceAll('"','""')}",${x.date},${x.amount.toFixed(2)}`).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='controle-de-custos.csv';a.click();URL.revokeObjectURL(a.href)};render();
+  </script>
+</body>
+</html>
