@@ -11,13 +11,9 @@
 <body>
   <section class="login" id="login"><div class="login-card"><h2>Controle</h2><p>Digite sua senha para acessar seus dados.</p><form id="loginForm"><input id="password" type="password" placeholder="Senha" required><button>Entrar</button><div class="error" id="loginError"></div></form><button class="secondary" id="resetBtn" type="button">Redefinir senha</button></div></section>
   <main class="wrap">
-    <h1>Controle de custos</h1>
+    <h1>Controle de Clientes</h1>
     <p class="sub">Acompanhe quanto você irá receber dos seus clientes.</p>
-    <section class="grid" aria-label="Resumo">
-      <div class="card"><div class="label">Total previsto</div><div class="value" id="total">R$ 0,00</div></div>
-      <div class="card"><div class="label">Clientes lançados</div><div class="value" id="count">0</div></div>
-      <div class="card"><div class="label">Próximo recebimento</div><div class="value" id="next">—</div></div>
-    </section>
+    <section class="grid" id="summary" aria-label="Resumo mensal"></section>
     <section class="panel">
       <form id="form" class="form">
         <label>Nome do cliente<input id="name" required placeholder="Ex.: Empresa Alfa"></label>
@@ -37,7 +33,7 @@
     let items=[], editing=null;
     const $=id=>document.getElementById(id), money=v=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v), dateFmt=v=>new Intl.DateTimeFormat('pt-BR',{timeZone:'UTC'}).format(new Date(v+'T00:00:00'));
     async function save(){const r=await fetch('/api/items',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(items)});if(!r.ok)alert('Não foi possível salvar os dados.');render()}
-    function render(){const q=$('search').value.toLowerCase();const view=items.filter(x=>x.name.toLowerCase().includes(q)).sort((a,b)=>a.date.localeCompare(b.date));$('total').textContent=money(items.reduce((s,x)=>s+Number(x.amount),0));$('count').textContent=items.length;const future=items.filter(x=>x.date>=new Date().toISOString().slice(0,10)).sort((a,b)=>a.date.localeCompare(b.date))[0];$('next').textContent=future?dateFmt(future.date):'—';$('rows').innerHTML=view.map(x=>`<tr><td>${esc(x.name)}</td><td>${dateFmt(x.date)}</td><td>${money(x.amount)}</td><td><div class="actions"><button class="secondary" onclick="editItem('${x.id}')">Editar</button><button class="danger" onclick="removeItem('${x.id}')">Excluir</button></div></td></tr>`).join('');$('empty').style.display=view.length?'none':'block'}
+    function render(){const q=$('search').value.toLowerCase();const view=items.filter(x=>x.name.toLowerCase().includes(q)).sort((a,b)=>a.date.localeCompare(b.date));const months={};items.forEach(x=>{const m=x.date.slice(0,7);months[m]=(months[m]||0)+Number(x.amount)});$('summary').innerHTML=Object.keys(months).sort().map(m=>{const [y,mo]=m.split('-');const label=new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(`${m}-01T00:00:00`));return `<div class="card"><div class="label">Total previsto do mês de ${label}</div><div class="value">${money(months[m])}</div></div>`}).join('')||'<div class="card"><div class="label">Total previsto</div><div class="value">R$ 0,00</div></div>';$('rows').innerHTML=view.map(x=>`<tr><td>${esc(x.name)}</td><td>${dateFmt(x.date)}</td><td>${money(x.amount)}</td><td><div class="actions"><button class="secondary" onclick="editItem('${x.id}')">Editar</button><button class="danger" onclick="removeItem('${x.id}')">Excluir</button></div></td></tr>`).join('');$('empty').style.display=view.length?'none':'block'}
     function esc(s){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
     $('form').onsubmit=e=>{e.preventDefault();const record={id:editing||crypto.randomUUID(),name:$('name').value.trim(),date:$('date').value,amount:Number($('amount').value)};if(editing)items=items.map(x=>x.id===editing?record:x);else items.push(record);editing=null;$('form').reset();$('save').textContent='Adicionar';save()};
     window.editItem=id=>{const x=items.find(i=>i.id===id);editing=id;$('name').value=x.name;$('date').value=x.date;$('amount').value=x.amount;$('save').textContent='Salvar edição';window.scrollTo({top:0,behavior:'smooth'})};
