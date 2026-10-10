@@ -54,7 +54,7 @@
     async function load(){const [a,b]=await Promise.all([fetch('/api/items'),fetch('/api/expenses')]);if(a.status===401)return;items=await a.json();expenses=await b.json();render();renderExpenses()}
     $('loginForm').onsubmit=async e=>{e.preventDefault();const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('password').value})});if(r.ok){$('login').classList.add('hidden');load()}else $('loginError').textContent='Senha inválida.'};
     $('resetBtn').onclick=async()=>{const old=prompt('Senha atual:');const next=prompt('Nova senha:');if(old&&next){const r=await fetch('/api/password',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({oldPassword:old,newPassword:next})});alert(r.ok?'Senha redefinida.':'Senha atual inválida.')}};
-    load();
+    fetch('/api/session').then(r=>{if(r.ok){$('login').classList.add('hidden');load()}});
   </script>
 </body>
 </html>
