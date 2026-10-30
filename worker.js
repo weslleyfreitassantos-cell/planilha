@@ -124,11 +124,6 @@ export default {
     if (url.pathname === '/api/session' && request.method === 'GET') {
       return cookie(request) === stored ? new Response('ok') : new Response('Unauthorized', { status: 401 });
     }
-    if (url.pathname === '/api/send-due-now' && request.method === 'GET') {
-      if (cookie(request) !== stored) return new Response('Unauthorized', { status: 401 });
-      const result = await sendDueReminders(env);
-      return Response.json({ ok: result.failed === 0, ...result, failures: result.failures.map(x => x.status) });
-    }
     if (url.pathname === '/api/test-reminder' && request.method === 'GET') {
       if (cookie(request) !== stored) return new Response('Unauthorized', { status: 401 });
       try {
