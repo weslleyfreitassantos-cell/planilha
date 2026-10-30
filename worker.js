@@ -1,7 +1,161 @@
 const encoder = new TextEncoder();
-async function hash(value){const bytes=await crypto.subtle.digest('SHA-256',encoder.encode(value));return [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('')}
-function cookie(request){return request.headers.get('Cookie')?.match(/controle_session=([^;]+)/)?.[1]}
-async function getSetting(env,id){const row=await env.DB.prepare('SELECT data FROM settings WHERE id=?').bind(id).first();return row?JSON.parse(row.data):[]}
-async function sendDueReminders(env){const today=new Date().toISOString().slice(0,10);const items=await getSetting(env,1);const expenses=await getSetting(env,3);const due=[...items.map(x=>({...x,type:'receber',label:'Receber'})),...expenses.map(x=>({...x,type:'pagar',label:'Pagar'}))].filter(x=>x.date===today);for(const x of due){try{const key=`${x.type}:${x.id}:${today}`;const exists=await env.DB.prepare('SELECT reminder_key FROM reminder_sent WHERE reminder_key=?').bind(key).first();if(exists)continue;const response=await fetch(env.REMINDER_RELAY_URL,{method:'POST',headers:{'content-type':'application/json','x-reminder-secret':env.REMINDER_SECRET||''},body:JSON.stringify({type:x.type,action:x.label,client:String(x.name).trim(),amount:Number(x.amount),date:String(x.date).slice(0,10),source:'Controle'})});if(!response.ok)throw new Error(`Relay HTTP ${response.status}`);await env.DB.prepare('INSERT INTO reminder_sent (reminder_key,sent_at) VALUES (?,?)').bind(key,new Date().toISOString()).run()}catch(error){console.error(`[REMINDER] falha isolada no item ${x.id}: ${error.message}`)}}}
-async function sendTestReminder(env){const items=await getSetting(env,1);const expenses=await getSetting(env,3);const x=items[0]?{...items[0],type:'receber',label:'Receber'}:expenses[0]?{...expenses[0],type:'pagar',label:'Pagar'}:{name:'Exemplo de teste',amount:1,date:new Date().toISOString().slice(0,10),type:'receber',label:'Receber'};const payload={type:x.type,action:x.label,client:String(x.name||'Teste').trim(),amount:Number(x.amount),date:String(x.date).slice(0,10),source:'Controle - teste'};const response=await fetch(env.REMINDER_RELAY_URL,{method:'POST',headers:{'content-type':'application/json','x-reminder-secret':env.REMINDER_SECRET||'','x-reminder-dry-run':'true'},body:JSON.stringify(payload)});const text=await response.text();return {ok:response.ok,status:response.status,error:text||null,checks:{type:typeof payload.type==='string'&&['receber','pagar'].includes(payload.type),client:typeof payload.client==='string'&&payload.client.length>0,amount:typeof payload.amount==='number'&&Number.isFinite(payload.amount)&&payload.amount>0,date:/^\\d{4}-\\d{2}-\\d{2}$/.test(payload.date),action:payload.action==='Receber'||payload.action==='Pagar'}}}
-export default {async scheduled(event,env,ctx){ctx.waitUntil(sendDueReminders(env))},async fetch(request,env){const url=new URL(request.url);const row=await env.DB.prepare('SELECT data FROM settings WHERE id=2').first();const stored=row?.data||await hash('123');if(!row)await env.DB.prepare('INSERT INTO settings (id,data) VALUES (2,?)').bind(stored).run();if(url.pathname==='/api/login'&&request.method==='POST'){const {password}=await request.json();if(await hash(password)!==stored)return new Response('Unauthorized',{status:401});return new Response('ok',{headers:{'Set-Cookie':`controle_session=${stored}; HttpOnly; Secure; SameSite=Strict; Max-Age=86400`}})}if(url.pathname==='/api/session'&&request.method==='GET')return cookie(request)===stored?new Response('ok'):new Response('Unauthorized',{status:401});if(url.pathname==='/api/test-reminder'&&request.method==='GET'){if(cookie(request)!==stored)return new Response('Unauthorized',{status:401});try{const x=await sendTestReminder(env);return Response.json({ok:x.ok,test:true,dry_run:true,relay_status:x.status,relay_response:x.error,checks:x.checks})}catch(error){return Response.json({ok:false,test:true,dry_run:true,relay_error:error?.name||'request_failed'})}}if(url.pathname==='/api/password'&&request.method==='PUT'){if(cookie(request)!==stored)return new Response('Unauthorized',{status:401});const {oldPassword,newPassword}=await request.json();if(await hash(oldPassword)!==stored||!newPassword)return new Response('Invalid',{status:400});const next=await hash(newPassword);await env.DB.prepare('UPDATE settings SET data=? WHERE id=2').bind(next).run();return new Response('ok')}if(url.pathname==='/api/items'||url.pathname==='/api/expenses'){if(cookie(request)!==stored)return new Response('Unauthorized',{status:401});const id=url.pathname==='/api/items'?1:3;if(request.method==='GET')return Response.json(await getSetting(env,id));if(request.method==='PUT'){await env.DB.prepare('INSERT INTO settings (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').bind(id,JSON.stringify(await request.json())).run();return Response.json({ok:true})}}return env.ASSETS.fetch(request)}};
+
+async function hash(value) {
+  const bytes = await crypto.subtle.digest('SHA-256', encoder.encode(value));
+  return [...new Uint8Array(bytes)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+function cookie(request) {
+  return request.headers.get('Cookie')?.match(/controle_session=([^;]+)/)?.[1];
+}
+
+async function getSetting(env, id) {
+  const row = await env.DB.prepare('SELECT data FROM settings WHERE id=?').bind(id).first();
+  return row ? JSON.parse(row.data) : [];
+}
+
+async function sendDueReminders(env, requestedDate) {
+  const today = requestedDate || new Date().toISOString().slice(0, 10);
+  const items = await getSetting(env, 1);
+  const expenses = await getSetting(env, 3);
+  const due = [
+    ...items.map(x => ({ ...x, type: 'receber', label: 'Receber' })),
+    ...expenses.map(x => ({ ...x, type: 'pagar', label: 'Pagar' }))
+  ].filter(x => x.date === today);
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+  const failures = [];
+
+  for (const x of due) {
+    const key = `${x.type}:${x.id}:${today}`;
+    try {
+      const exists = await env.DB.prepare('SELECT reminder_key FROM reminder_sent WHERE reminder_key=?').bind(key).first();
+      if (exists) {
+        skipped++;
+        continue;
+      }
+
+      const response = await fetch(env.REMINDER_RELAY_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-reminder-secret': env.REMINDER_SECRET || ''
+        },
+        body: JSON.stringify({
+          type: x.type,
+          action: x.label,
+          client: String(x.name || '').trim(),
+          amount: Number(x.amount),
+          date: String(x.date).slice(0, 10),
+          source: 'Controle'
+        })
+      });
+
+      if (!response.ok) throw new Error(`relay_${response.status}`);
+      await env.DB.prepare('INSERT INTO reminder_sent (reminder_key,sent_at) VALUES (?,?)')
+        .bind(key, new Date().toISOString()).run();
+      sent++;
+    } catch (error) {
+      failed++;
+      failures.push({ id: x.id, status: error?.message || 'send_failed' });
+      console.error(`[REMINDER] falha isolada no item ${x.id}: ${error?.message || 'send_failed'}`);
+    }
+  }
+
+  return { date: today, total: due.length, sent, skipped, failed, failures };
+}
+
+async function sendTestReminder(env) {
+  const items = await getSetting(env, 1);
+  const expenses = await getSetting(env, 3);
+  const x = items[0]
+    ? { ...items[0], type: 'receber', label: 'Receber' }
+    : expenses[0]
+      ? { ...expenses[0], type: 'pagar', label: 'Pagar' }
+      : { name: 'Exemplo de teste', amount: 1, date: new Date().toISOString().slice(0, 10), type: 'receber', label: 'Receber' };
+  const payload = {
+    type: x.type,
+    action: x.label,
+    client: String(x.name || 'Teste').trim(),
+    amount: Number(x.amount),
+    date: String(x.date).slice(0, 10),
+    source: 'Controle - teste'
+  };
+  const response = await fetch(env.REMINDER_RELAY_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-reminder-secret': env.REMINDER_SECRET || '',
+      'x-reminder-dry-run': 'true'
+    },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  return {
+    ok: response.ok,
+    status: response.status,
+    error: text || null,
+    checks: {
+      type: typeof payload.type === 'string' && ['receber', 'pagar'].includes(payload.type),
+      client: typeof payload.client === 'string' && payload.client.length > 0,
+      amount: typeof payload.amount === 'number' && Number.isFinite(payload.amount) && payload.amount > 0,
+      date: payload.date.length === 10 && payload.date[4] === '-' && payload.date[7] === '-',
+      action: payload.action === 'Receber' || payload.action === 'Pagar'
+    }
+  };
+}
+
+export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sendDueReminders(env));
+  },
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const row = await env.DB.prepare('SELECT data FROM settings WHERE id=2').first();
+    const stored = row?.data || await hash('123');
+    if (!row) await env.DB.prepare('INSERT INTO settings (id,data) VALUES (2,?)').bind(stored).run();
+
+    if (url.pathname === '/api/login' && request.method === 'POST') {
+      const { password } = await request.json();
+      if (await hash(password) !== stored) return new Response('Unauthorized', { status: 401 });
+      return new Response('ok', { headers: { 'Set-Cookie': `controle_session=${stored}; HttpOnly; Secure; SameSite=Strict; Max-Age=86400` } });
+    }
+    if (url.pathname === '/api/session' && request.method === 'GET') {
+      return cookie(request) === stored ? new Response('ok') : new Response('Unauthorized', { status: 401 });
+    }
+    if (url.pathname === '/api/send-due-now' && request.method === 'GET') {
+      if (cookie(request) !== stored) return new Response('Unauthorized', { status: 401 });
+      const result = await sendDueReminders(env);
+      return Response.json({ ok: result.failed === 0, ...result, failures: result.failures.map(x => x.status) });
+    }
+    if (url.pathname === '/api/test-reminder' && request.method === 'GET') {
+      if (cookie(request) !== stored) return new Response('Unauthorized', { status: 401 });
+      try {
+        const x = await sendTestReminder(env);
+        return Response.json({ ok: x.ok, test: true, dry_run: true, relay_status: x.status, relay_response: x.error, checks: x.checks });
+      } catch (error) {
+        return Response.json({ ok: false, test: true, dry_run: true, relay_error: error?.name || 'request_failed' }, { status: 502 });
+      }
+    }
+    if (url.pathname === '/api/password' && request.method === 'PUT') {
+      if (cookie(request) !== stored) return new Response('Unauthorized', { status: 401 });
+      const { oldPassword, newPassword } = await request.json();
+      if (await hash(oldPassword) !== stored || !newPassword) return new Response('Invalid', { status: 400 });
+      const next = await hash(newPassword);
+      await env.DB.prepare('UPDATE settings SET data=? WHERE id=2').bind(next).run();
+      return new Response('ok');
+    }
+    if (url.pathname === '/api/items' || url.pathname === '/api/expenses') {
+      if (cookie(request) !== stored) return new Response('Unauthorized', { status: 401 });
+      const id = url.pathname === '/api/items' ? 1 : 3;
+      if (request.method === 'GET') return Response.json(await getSetting(env, id));
+      if (request.method === 'PUT') {
+        await env.DB.prepare('INSERT INTO settings (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data')
+          .bind(id, JSON.stringify(await request.json())).run();
+        return Response.json({ ok: true });
+      }
+    }
+    return env.ASSETS.fetch(request);
+  }
+};
