@@ -33,12 +33,7 @@ function installmentNumber(expense) {
 }
 
 function installmentAmount(expense) {
-  const totalCents = Math.max(0, Math.round(Number(expense.amount) * 100));
-  const total = installmentCount(expense);
-  const current = installmentNumber(expense);
-  const base = Math.floor(totalCents / total);
-  const remainder = totalCents % total;
-  return (base + (current <= remainder ? 1 : 0)) / 100;
+  return Math.max(0, Math.round(Number(expense.amount) * 100)) / 100;
 }
 
 function addMonth(value, anchorDay) {
