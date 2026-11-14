@@ -14,13 +14,82 @@ async function getSetting(env, id) {
   return row ? JSON.parse(row.data) : [];
 }
 
+async function saveSetting(env, id, value) {
+  await env.DB.prepare('INSERT INTO settings (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data')
+    .bind(id, JSON.stringify(value)).run();
+}
+
+function intValue(value, fallback = 1) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function installmentCount(expense) {
+  return Math.min(60, intValue(expense.installments, 1));
+}
+
+function installmentNumber(expense) {
+  return Math.min(installmentCount(expense), intValue(expense.installment, 1));
+}
+
+function installmentAmount(expense) {
+  const totalCents = Math.max(0, Math.round(Number(expense.amount) * 100));
+  const total = installmentCount(expense);
+  const current = installmentNumber(expense);
+  const base = Math.floor(totalCents / total);
+  const remainder = totalCents % total;
+  return (base + (current <= remainder ? 1 : 0)) / 100;
+}
+
+function addMonth(value, anchorDay) {
+  const date = new Date(`${value}T00:00:00Z`);
+  const nextMonth = date.getUTCMonth() + 1;
+  const nextYear = date.getUTCFullYear() + Math.floor(nextMonth / 12);
+  const month = nextMonth % 12;
+  const day = Math.min(intValue(anchorDay, date.getUTCDate()), 31);
+  const lastDay = new Date(Date.UTC(nextYear, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(nextYear, month, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+
+async function advanceExpenseAfterReminder(env, expense, dueDate) {
+  if (installmentCount(expense) <= 1) return;
+  const expenses = await getSetting(env, 3);
+  let changed = false;
+  const nextExpenses = expenses.map(currentExpense => {
+    if (currentExpense.id !== expense.id || currentExpense.date !== dueDate || currentExpense.completed) {
+      return currentExpense;
+    }
+
+    const total = installmentCount(currentExpense);
+    const current = installmentNumber(currentExpense);
+    const anchorDay = intValue(currentExpense.anchorDay, Number(String(currentExpense.date).slice(8, 10)));
+    changed = true;
+    if (current >= total) {
+      return { ...currentExpense, installments: total, installment: current, anchorDay, completed: true };
+    }
+
+    return {
+      ...currentExpense,
+      installments: total,
+      installment: current + 1,
+      anchorDay,
+      date: addMonth(currentExpense.date, anchorDay),
+      completed: false
+    };
+  });
+
+  if (changed) await saveSetting(env, 3, nextExpenses);
+}
+
 async function sendDueReminders(env, requestedDate) {
   const today = requestedDate || new Date().toISOString().slice(0, 10);
   const items = await getSetting(env, 1);
   const expenses = await getSetting(env, 3);
   const due = [
     ...items.map(x => ({ ...x, type: 'receber', label: 'Receber' })),
-    ...expenses.map(x => ({ ...x, type: 'pagar', label: 'Pagar' }))
+    ...expenses
+      .filter(x => !x.completed)
+      .map(x => ({ ...x, type: 'pagar', label: 'Pagar', amount: installmentAmount(x) }))
   ].filter(x => x.date === today);
   let sent = 0;
   let skipped = 0;
@@ -48,13 +117,16 @@ async function sendDueReminders(env, requestedDate) {
           client: String(x.name || '').trim(),
           amount: Number(x.amount),
           date: String(x.date).slice(0, 10),
-          source: 'Controle'
+          source: 'Controle',
+          installment: x.type === 'pagar' ? installmentNumber(x) : undefined,
+          installments: x.type === 'pagar' ? installmentCount(x) : undefined
         })
       });
 
       if (!response.ok) throw new Error(`relay_${response.status}`);
       await env.DB.prepare('INSERT INTO reminder_sent (reminder_key,sent_at) VALUES (?,?)')
         .bind(key, new Date().toISOString()).run();
+      if (x.type === 'pagar') await advanceExpenseAfterReminder(env, x, today);
       sent++;
     } catch (error) {
       failed++;
@@ -72,7 +144,7 @@ async function sendTestReminder(env) {
   const x = items[0]
     ? { ...items[0], type: 'receber', label: 'Receber' }
     : expenses[0]
-      ? { ...expenses[0], type: 'pagar', label: 'Pagar' }
+      ? { ...expenses[0], type: 'pagar', label: 'Pagar', amount: installmentAmount(expenses[0]) }
       : { name: 'Exemplo de teste', amount: 1, date: new Date().toISOString().slice(0, 10), type: 'receber', label: 'Receber' };
   const payload = {
     type: x.type,
@@ -80,7 +152,9 @@ async function sendTestReminder(env) {
     client: String(x.name || 'Teste').trim(),
     amount: Number(x.amount),
     date: String(x.date).slice(0, 10),
-    source: 'Controle - teste'
+    source: 'Controle - teste',
+    installment: x.type === 'pagar' ? installmentNumber(x) : undefined,
+    installments: x.type === 'pagar' ? installmentCount(x) : undefined
   };
   const response = await fetch(env.REMINDER_RELAY_URL, {
     method: 'POST',
@@ -146,8 +220,7 @@ export default {
       const id = url.pathname === '/api/items' ? 1 : 3;
       if (request.method === 'GET') return Response.json(await getSetting(env, id));
       if (request.method === 'PUT') {
-        await env.DB.prepare('INSERT INTO settings (id,data) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data')
-          .bind(id, JSON.stringify(await request.json())).run();
+        await saveSetting(env, id, await request.json());
         return Response.json({ ok: true });
       }
     }
